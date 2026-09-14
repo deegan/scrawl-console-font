@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Wire the scrawl console font into ~/.config/foot/foot.ini.
+
+Usage: scrawl-font-setup-foot [ScrawlS|ScrawlW]
+
+Comments out any existing font= line under [main], adds the scrawl font
+plus dpi-aware=yes right after it, and ensures a [tweak] section with
+font-monospace-warn=no exists at the end of the file. Idempotent: safe
+to re-run, including to switch between ScrawlS and ScrawlW.
+"""
+import datetime
+import re
+import shutil
+import sys
+from pathlib import Path
+
+CONFIG = Path.home() / ".config/foot/foot.ini"
+DPI_LINE = "dpi-aware=yes"
+TWEAK_KEY = "font-monospace-warn=no"
+
+
+def main():
+    variant = sys.argv[1] if len(sys.argv) > 1 else "ScrawlS"
+    if variant not in ("ScrawlS", "ScrawlW"):
+        sys.exit(f"usage: {sys.argv[0]} [ScrawlS|ScrawlW]")
+    font_line = f"font={variant}:pixelsize=16"
+
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    if not CONFIG.exists():
+        CONFIG.write_text("[main]\n")
+
+    text = CONFIG.read_text()
+    if re.search(rf"^{re.escape(font_line)}\s*$", text, re.M) and DPI_LINE in text:
+        print(f"{CONFIG}: already configured for {variant}")
+        return
+
+    backup = CONFIG.with_name(CONFIG.name + f".bak-{datetime.datetime.now():%Y%m%d%H%M%S}")
+    shutil.copy2(CONFIG, backup)
+
+    lines = text.splitlines()
+    out = []
+    in_main = False
+    inserted_font = False
+    has_dpi_aware = any(re.match(r"^\s*dpi-aware\s*=", l) for l in lines)
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_main = stripped == "[main]"
+            out.append(line)
+            continue
+        if in_main and not inserted_font and re.match(r"^\s*font\s*=", line):
+            out.append(f"# {line}")
+            out.append(font_line)
+            if not has_dpi_aware:
+                out.append(DPI_LINE)
+            inserted_font = True
+            continue
+        if in_main and re.match(r"^\s*dpi-aware\s*=", line):
+            out.append(DPI_LINE)
+            continue
+        out.append(line)
+
+    if not inserted_font:
+        if "[main]" not in text:
+            out = ["[main]", font_line, DPI_LINE, ""] + out
+        else:
+            new_out = []
+            for line in out:
+                new_out.append(line)
+                if line.strip() == "[main]":
+                    new_out.append(font_line)
+                    if not has_dpi_aware:
+                        new_out.append(DPI_LINE)
+            out = new_out
+
+    text = "\n".join(out).rstrip("\n") + "\n"
+
+    if "[tweak]" in text:
+        if TWEAK_KEY not in text:
+            text = re.sub(r"(\[tweak\]\s*\n)", rf"\1{TWEAK_KEY}\n", text, count=1)
+    else:
+        text += f"\n[tweak]\n# Silences a harmless false-positive from foot's monospace sanity check.\n{TWEAK_KEY}\n"
+
+    CONFIG.write_text(text)
+    print(f"Updated {CONFIG} for {variant} (backup: {backup})")
+    print("Open a new foot window to see the change; existing windows won't hot-reload.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,25 @@
+pkgbase = scrawl-console-font
+	pkgdesc = Slackware 'scrawl' VGA console font, converted to BDF for use in GUI terminals (e.g. foot), with a foot config fragment
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://slackware.uk/slackware/slackware64-15.0/slackware64/a/kbd-1.15.3-x86_64-6.txz
+	install = scrawl-console-font.install
+	arch = any
+	license = GPL2
+	depends = fontconfig
+	depends = python
+	optdepends = foot: run scrawl-font-setup-foot to wire the font into foot.ini
+	noextract = scrawl_s.fnt.gz
+	noextract = scrawl_w.fnt.gz
+	source = scrawl_s.fnt.gz
+	source = scrawl_w.fnt.gz
+	source = raw2bdf.py
+	source = foot-scrawl.ini
+	source = scrawl-font-setup-foot
+	sha256sums = 688130b57beccbd23279ea8baba7f939020c04e617081fe93fe77a56137af93b
+	sha256sums = 31d9cf4cd49639870d71d08759f3b681af24bb5d4292cedafb102ac60d9c3d72
+	sha256sums = 5981abcaa43166d1f137a079a82f8ac7caa7cdd08e2dfa1471fe13c38ba08e58
+	sha256sums = d8575949d5f83d638ba4f81f66d2bca0544ba46ab7eca22701dd5e74a16c3c6a
+	sha256sums = 3ac913bc5f05dd0a5cf3e895c4b14f4f3079d1702ce0f7abefcb7a2bb159170c
+
+pkgname = scrawl-console-font
