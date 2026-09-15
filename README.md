@@ -23,6 +23,14 @@ cd scrawl-console-font
 makepkg -si
 ```
 
+Or, without cloning or needing build tools, grab the prebuilt package from
+[Releases](https://github.com/deegan/scrawl-console-font/releases/latest)
+and install it directly:
+
+```sh
+sudo pacman -U scrawl-console-font-*-any.pkg.tar.zst
+```
+
 Then wire it into `foot`:
 
 ```sh
