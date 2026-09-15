@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Build the scrawl console font as a TrueType font and wire it into iTerm2.
+
+Usage: scrawl-font-setup-macos [ScrawlS|ScrawlW] [--no-icons]
+
+What it does:
+  - Converts the raw Slackware console font to BDF (raw2bdf.py), then traces
+    the BDF's pixels into vector outlines to get a scalable TTF (bdf2ttf.py).
+    macOS refuses to install bitmap-only fonts, so this can't just embed the
+    bitmap the way the Linux/foot side does.
+  - Patches in Nerd Font icons (Powerline, Powerline Extra, IEC power
+    symbols) using the official nerd-fonts font-patcher, downloaded and
+    checksum-verified into build-macos/ on first run. Pass --no-icons to
+    skip this and install the plain font instead. Only these three glyph
+    sets are used — the more detailed ones (Font Awesome, Material Design,
+    etc.) don't stay legible traced down into an 8px-wide cell.
+  - Installs the resulting TTF into ~/Library/Fonts.
+  - Adds (or updates) a "Scrawl" iTerm2 Dynamic Profile that uses the font,
+    inheriting everything else from your Default profile. This only touches
+    ~/Library/Application Support/iTerm2/DynamicProfiles/scrawl-console-font.json
+    — it does not edit your existing profiles or iTerm2's main preferences.
+
+Requires FontForge: brew install fontforge
+  - Note: FontForge build 20251009 (Homebrew's current release as of this
+    writing) corrupts some patched glyphs — see
+    https://github.com/fontforge/fontforge/commit/aedb8f2e. If icon glyphs
+    come out visibly broken, rebuild with `brew install fontforge --HEAD`.
+
+Idempotent: safe to re-run, including to switch between ScrawlS and ScrawlW.
+"""
+import gzip
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+import uuid
+import zipfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+FONTS_DIR = Path.home() / "Library/Fonts"
+PROFILES_DIR = Path.home() / "Library/Application Support/iTerm2/DynamicProfiles"
+PROFILE_FILE = PROFILES_DIR / "scrawl-console-font.json"
+PROFILE_NAME = "Scrawl"
+POINT_SIZE = 16
+
+VARIANTS = {"ScrawlS": "scrawl_s", "ScrawlW": "scrawl_w"}
+
+NERD_FONTS_VERSION = "v3.5.1"
+PATCHER_URL = (
+    f"https://github.com/ryanoasis/nerd-fonts/releases/download/"
+    f"{NERD_FONTS_VERSION}/FontPatcher.zip"
+)
+PATCHER_SHA256 = "42bcb32145499a35732274c7fc48deb434ad0d2e0e118f98527c1479c6fa251a"
+
+
+def build(fontforge, variant):
+    stem = VARIANTS[variant]
+    build_dir = REPO / "build-macos"
+    build_dir.mkdir(exist_ok=True)
+
+    fnt_path = build_dir / f"{stem}.fnt"
+    bdf_path = build_dir / f"{variant}.bdf"
+    ttf_path = build_dir / f"{variant}.ttf"
+
+    fnt_path.write_bytes(gzip.decompress((REPO / f"{stem}.fnt.gz").read_bytes()))
+    subprocess.run(
+        [sys.executable, str(REPO / "raw2bdf.py"), str(fnt_path), str(bdf_path), variant],
+        check=True,
+    )
+    subprocess.run(
+        [fontforge, "-script", str(REPO / "bdf2ttf.py"), str(bdf_path), str(ttf_path), variant],
+        check=True,
+    )
+    return ttf_path
+
+
+def fetch_patcher(build_dir):
+    patcher_script = build_dir / "FontPatcher" / "font-patcher"
+    if patcher_script.exists():
+        return patcher_script
+
+    zip_path = build_dir / "FontPatcher.zip"
+    print(f"Downloading Nerd Fonts patcher ({NERD_FONTS_VERSION})...")
+    urllib.request.urlretrieve(PATCHER_URL, zip_path)
+
+    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    if digest != PATCHER_SHA256:
+        zip_path.unlink()
+        sys.exit(f"FontPatcher.zip checksum mismatch: got {digest}, expected {PATCHER_SHA256}")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(patcher_script.parent)
+    zip_path.unlink()
+    return patcher_script
+
+
+def patch_nerd_font(fontforge, patcher_script, ttf_path, build_dir):
+    result = subprocess.run(
+        [
+            fontforge, "--script", str(patcher_script),
+            "--powerline", "--powerlineextra", "--powersymbols",
+            "--mono", "--quiet", "--outputdir", str(build_dir), str(ttf_path),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    match = re.search(r"===>\s*'([^']+)'", result.stdout)
+    if not match:
+        sys.exit("font-patcher did not report an output filename:\n" + result.stdout + result.stderr)
+    return build_dir / match.group(1)
+
+
+def font_family_name(fontforge, ttf_path):
+    result = subprocess.run(
+        [
+            fontforge, "-c",
+            "import fontforge, sys; f = fontforge.open(sys.argv[1]); print(f.familyname)",
+            str(ttf_path),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    return result.stdout.strip().splitlines()[-1]
+
+
+def install_font(ttf_path):
+    FONTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = FONTS_DIR / ttf_path.name
+    shutil.copy2(ttf_path, dest)
+    return dest
+
+
+def write_profile(family):
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    font_spec = f"{family} {POINT_SIZE}"
+
+    data = {"Profiles": []}
+    if PROFILE_FILE.exists():
+        data = json.loads(PROFILE_FILE.read_text())
+    profiles = data.setdefault("Profiles", [])
+
+    existing = next((p for p in profiles if p.get("Name") == PROFILE_NAME), None)
+    if existing:
+        existing["Normal Font"] = font_spec
+        existing["Non Ascii Font"] = font_spec
+    else:
+        profiles.append(
+            {
+                "Name": PROFILE_NAME,
+                "Guid": str(uuid.uuid4()),
+                "Dynamic Profile Parent Name": "Default",
+                "Normal Font": font_spec,
+                "Non Ascii Font": font_spec,
+                "Use Non-ASCII Font": True,
+            }
+        )
+
+    PROFILE_FILE.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def main():
+    args = sys.argv[1:]
+    icons = "--no-icons" not in args
+    args = [a for a in args if a != "--no-icons"]
+    variant = args[0] if args else "ScrawlS"
+    if variant not in VARIANTS or len(args) > 1:
+        sys.exit(f"usage: {sys.argv[0]} [ScrawlS|ScrawlW] [--no-icons]")
+
+    fontforge = shutil.which("fontforge")
+    if not fontforge:
+        sys.exit("fontforge not found. Install it with `brew install fontforge` and re-run.")
+
+    ttf_path = build(fontforge, variant)
+    family = variant
+
+    if icons:
+        build_dir = ttf_path.parent
+        patcher_script = fetch_patcher(build_dir)
+        ttf_path = patch_nerd_font(fontforge, patcher_script, ttf_path, build_dir)
+        family = font_family_name(fontforge, ttf_path)
+
+    dest = install_font(ttf_path)
+    write_profile(family)
+
+    print(f"Installed {dest}")
+    print(f"Updated {PROFILE_FILE}")
+    print(f'Open iTerm2 > Preferences > Profiles and pick "{PROFILE_NAME}"')
+    print("(restart iTerm2 first if it was already running).")
+
+
+if __name__ == "__main__":
+    main()

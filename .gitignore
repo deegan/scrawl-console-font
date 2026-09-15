@@ -1,4 +1,5 @@
 /src/
 /pkg/
+/build-macos/
 *.pkg.tar.*
 *.log
